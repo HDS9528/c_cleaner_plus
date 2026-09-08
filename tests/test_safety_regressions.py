@@ -1042,7 +1042,11 @@ class SafetyRegressionTests(unittest.TestCase):
         self.assertIn('MessagesFile: "ChineseSimplified.isl"', installer)
         self.assertIn("PrivilegesRequired=admin", installer)
         self.assertIn("uac_admin=True", spec)
-        self.assertIn("Flags: nowait postinstall skipifsilent", installer)
+        run_section = installer.split("[Run]", 1)[1].split("[UninstallRun]", 1)[0]
+        launch_entries = [line for line in run_section.splitlines() if line.startswith("Filename:")]
+        self.assertEqual(len(launch_entries), 1)
+        launch_flags = set(launch_entries[0].split("Flags:", 1)[1].strip().split())
+        self.assertTrue({"nowait", "postinstall", "skipifsilent", "runascurrentuser"} <= launch_flags)
         self.assertNotIn("runasoriginaluser", installer)
         self.assertIn('RunOnceId: "RemoveScheduledTasks"', installer)
 

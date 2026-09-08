@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-C盘强力清理工具 v0.7.9
+C盘强力清理工具 v0.8.0
 PySide6 + PySide6-Fluent-Widgets (Fluent2 UI)
 包含：常规清理(支持拖拽排序与自定义规则)、大文件扫描、重复文件、空文件夹、无效快捷方式等
 """
@@ -146,7 +146,7 @@ InfoBar = _RuntimeInfoBar(_FluentInfoBar)
 # ══════════════════════════════════════════════════════════
 #  版本与更新配置
 # ══════════════════════════════════════════════════════════
-CURRENT_VERSION = "0.7.9"
+CURRENT_VERSION = "0.8.0"
 UPDATE_JSON_URL = "https://gitee.com/kio0/c_cleaner_plus/raw/master/update.json"
 APP_SCHEDULED_TASK_PREFIX = "C盘强力清理工具 - "
 APP_AUTOSTART_TASK_NAME = "C盘强力清理工具 开机自启"
@@ -1123,6 +1123,8 @@ class CleanRulesTableView(TableView):
         self._drag_started = False
         self._drag_shadow = None
         self._drag_shadow_offset = QPoint(40, 18)
+        self._range_anchor = None
+        self._shift_range_pressed = False
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
@@ -1210,20 +1212,45 @@ class CleanRulesTableView(TableView):
             return True
         return False
 
+    def _apply_shift_range_checkbox(self, start_row, end_row, checked):
+        model = self.model()
+        if model is None or not hasattr(model, "set_all_checked"):
+            return
+        first, last = sorted((start_row, end_row))
+        rows = [row for row in range(max(0, first), min(last + 1, model.rowCount()))
+                if not self.isRowHidden(row)]
+        model.set_all_checked(checked, rows)
+        self.setCurrentIndex(model.index(end_row, 0))
+        self.selectRow(end_row)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            self._shift_range_pressed = False
+            self._press_pos = None
+            self._press_row = -1
+            self._drag_started = False
             idx = self.indexAt(self._event_pos(event))
+            model = self.model()
+            if idx.isValid() and idx.column() == 0 and hasattr(model, "row_at"):
+                # Track the rule itself: numeric row positions change on sorting and reload.
+                anchor_row = next((row for row in range(model.rowCount())
+                                   if model.row_at(row) is self._range_anchor), None)
+                if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                        and anchor_row is not None and not self.isRowHidden(anchor_row)):
+                    self._apply_shift_range_checkbox(anchor_row, idx.row(), self._range_anchor.checked)
+                    self._shift_range_pressed = True
+                    event.accept()
+                    return
+                self._range_anchor = model.row_at(idx.row())
             if idx.isValid() and idx.column() != 0 and self._drag_enabled:
                 self._press_pos = self._event_pos(event)
                 self._press_row = idx.row()
-                self._drag_started = False
-            else:
-                self._press_pos = None
-                self._press_row = -1
-                self._drag_started = False
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self._shift_range_pressed:
+            event.accept()
+            return
         if self._drag_enabled and self._press_pos is not None and self._press_row >= 0 and (event.buttons() & Qt.MouseButton.LeftButton):
             pos = self._event_pos(event)
             global_pos = event.globalPosition().toPoint() if hasattr(event, 'globalPosition') else self.viewport().mapToGlobal(pos)
@@ -1247,6 +1274,10 @@ class CleanRulesTableView(TableView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._shift_range_pressed:
+            self._shift_range_pressed = False
+            event.accept()
+            return
         handled = False
         if self._drag_enabled and self._drag_started and self._press_row >= 0:
             handled = self._move_row_by_pos(self._press_row, self._event_pos(event))
@@ -10533,12 +10564,8 @@ class CleanPage(ScrollArea):
         self.tbl.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.tbl.verticalScrollBar().setSingleStep(36)
         header = self.tbl.horizontalHeader()
-        header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(False)
         header.sectionClicked.connect(self._on_header_section_clicked)
@@ -10578,6 +10605,7 @@ class CleanPage(ScrollArea):
         self.tbl.setColumnWidth(0, 44)
         self.tbl.setColumnWidth(1, 230 if is_english else 150)
         self.tbl.setColumnWidth(2, 360 if is_english else 380)
+        self.tbl.setColumnWidth(3, 360 if is_english else 330)
         self.tbl.setColumnWidth(4, 95)
 
     def _prune_estimated_sizes(self):
